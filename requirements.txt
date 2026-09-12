@@ -1,0 +1,11 @@
+# Core
+python-dotenv>=1.0.0
+pandas>=2.2.0
+
+# LLM providers — install the one matching your LLM_PROVIDER setting in .env.
+# gemini is the default (free tier) so it's listed as required.
+google-generativeai>=0.8.0
+
+# Uncomment if you switch LLM_PROVIDER to anthropic or openai:
+# anthropic>=0.40.0
+# openai>=1.50.0
