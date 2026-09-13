@@ -137,6 +137,16 @@ decision. Keep the "why" and the alternative you rejected.)*
   with hard-contract checks passing: 78 full_payment, 41 installments,
   1 partial_payment, 8 wait, and 122 not_recommended. Fixed a floating-point
   boundary case where a safe full request was reported one cent short.
+- 2026-09-13 — Decided: code/main.py is the end-to-end runner. It loads the
+  bundle once, resolves blank image amounts once, reuses one provider client
+  for cached message overrides, calls decide_request for every request, writes
+  the exact required output schema, and validates both decision invariants and
+  the physical CSV header/row count. Rejected: separate per-request loading or
+  validation that only inspects in-memory objects. Why: shared bundle state
+  avoids repeated work, while file-level validation catches malformed output.
+- 2026-09-13 — Diagnostic result: full cached pipeline produced output.csv
+  with 250 data rows plus header in 164.02 seconds; all validation checks
+  passed with zero failures.
 
 ---
 
@@ -158,10 +168,12 @@ decision. Keep the "why" and the alternative you rejected.)*
   25,342 events + 250 requests + 275 profiles load cleanly). Block 2 code
   complete and smoke-tested on user_100 with projected recurring debits and
   scheduled salary visible. Block 3 decision engine implemented and validated
-  across all 250 requests for hard output contracts.
+  across all 250 requests for hard output contracts. End-to-end main.py run
+  completed and wrote a validated output.csv.
 - **Block 2 files:** code/engine/{__init__.py, recurrence.py,
   message_overrides.py, simulator.py, block2_check.py}
 - **Block 3 files:** code/engine/decision.py
+- **Block 4 files:** code/main.py, output.csv
 - **Sample accuracy so far:** N/A — no hidden labels; 250-request deterministic
   contract diagnostic passes
 - **Known bugs / open risks:** (1) message override prompt is untested
@@ -190,10 +202,10 @@ decision. Keep the "why" and the alternative you rejected.)*
   ignored. Split back into separate lines. Lesson: always verify
   .gitignore with `type .gitignore` after Add-Content, don't assume it
   appended cleanly.
-- **Next concrete action:** add the main pipeline/output writer and a
-  deterministic verifier. Before final packaging, close the remaining Block 2
-  data-marker review for duplicate records and unrealized investments, and
-  spot-check message overrides against real message text.
+- **Next concrete action:** close the remaining Block 2 data-marker review for
+  duplicate records and unrealized investments, then build usage accounting,
+  README updates, and code.zip packaging. Spot-check message overrides against
+  real message text before final submission.
 
 ---
 
