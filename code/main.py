@@ -33,6 +33,11 @@ ALLOWED_STATUSES = {
 ALLOWED_METHODS = {
 	"full_payment", "partial_payment", "installments", "wait", "not_recommended",
 }
+PRICING = {
+	"gemini": (0.10, 0.40, "https://ai.google.dev/gemini-api/docs/pricing"),
+	"anthropic": (1.00, 5.00, "https://www.anthropic.com/pricing#api"),
+	"openai": (0.15, 0.60, "https://openai.com/api/pricing/"),
+}
 
 
 def _parse_plan(raw: str) -> list[tuple[date, float]]:
@@ -128,16 +133,93 @@ def _output_file_failures(output_path: Path, expected_rows: int) -> list[str]:
 	return failures
 
 
+def _write_usage_report(
+	output_path: Path,
+	request_count: int,
+	client,
+	evidence_usage: dict,
+	message_usage: dict,
+	bundle: DataBundle,
+	resolvable_images: set[str],
+) -> None:
+	input_tokens = evidence_usage["input_tokens"] + message_usage["input_tokens"]
+	output_tokens = evidence_usage["output_tokens"] + message_usage["output_tokens"]
+	calls = evidence_usage["calls"] + message_usage["calls"]
+	total_tokens = input_tokens + output_tokens
+	input_rate, output_rate, pricing_url = PRICING.get(client.provider, (0.0, 0.0, "pricing unavailable"))
+	cost = input_tokens / 1_000_000 * input_rate + output_tokens / 1_000_000 * output_rate
+	resolvable_messages = {
+		message.message_id
+		for messages in bundle.messages_by_user.values()
+		for message in messages
+		if message.related_event_id
+	}
+	resolvable_items = len(resolvable_images) + len(resolvable_messages)
+	fresh_item_ids = evidence_usage["fresh_item_ids"] | message_usage["fresh_item_ids"]
+	cached_item_ids = evidence_usage["cached_item_ids"] | message_usage["cached_item_ids"]
+	unprocessed_items = resolvable_items - len(fresh_item_ids) - len(cached_item_ids)
+	report_path = Path(__file__).resolve().parent / "evaluation" / "usage_report.md"
+	report_path.parent.mkdir(parents=True, exist_ok=True)
+	report_path.write_text(
+		f"""# LLM Usage Report
+
+Final full-dataset run for `{request_count}` requests.
+
+## Provider and pricing
+
+- Provider: `{client.provider}`
+- Model: `{client.model}`
+- Input rate: `${input_rate:.2f}` per million tokens
+- Output rate: `${output_rate:.2f}` per million tokens
+- Pricing source: {pricing_url}
+
+## Usage totals
+
+| Metric | Total | Average per request |
+|---|---:|---:|
+| Real API calls | {calls} | {calls / request_count:.2f} |
+| Input tokens | {input_tokens:,} | {input_tokens / request_count:,.2f} |
+| Output tokens | {output_tokens:,} | {output_tokens / request_count:,.2f} |
+| Total tokens | {total_tokens:,} | {total_tokens / request_count:,.2f} |
+| Estimated cost | ${cost:.6f} | ${cost / request_count:.6f} |
+
+## Cache context
+
+- Resolvable items discovered: {resolvable_items} total ({len(resolvable_images)} images + {len(resolvable_messages)} messages)
+- Fresh API calls/items: {calls} calls for {len(fresh_item_ids)} unique items
+- Unique items served from cache: {len(cached_item_ids)}
+- Cache retrievals during request processing: {evidence_usage['cached_items'] + message_usage['cached_items']}
+- Resolvable items not reached by an evaluation request: {unprocessed_items}
+- Image resolver calls: {evidence_usage['calls']}
+- Message override calls: {message_usage['calls']}
+
+Only real, non-cache API calls are included in token and cost totals. The
+provider/model abstraction supplied token counts from each response.
+""",
+		encoding="utf-8",
+	)
+
+
 def run(data_dir: Path, output_path: Path) -> tuple[list[Decision], list[str], float]:
 	started = time.perf_counter()
 	bundle = load_all(data_dir)
 	client = get_client()
-	resolve_blank_amounts(bundle, data_dir, api_client=client)
+	resolvable_images = {
+		image.image_id
+		for images in bundle.images_by_user.values()
+		for image in images
+		if image.related_event_id
+		and any(event.event_id == image.related_event_id and event.amount is None
+				for event in bundle.events_by_user.get(image.user_id, []))
+	}
+	evidence_usage = {}
+	message_usage = {}
+	resolve_blank_amounts(bundle, data_dir, api_client=client, usage=evidence_usage)
 
 	decisions: list[Decision] = []
 	for request in bundle.requests:
 		context = get_context(bundle, request.request_id)
-		overrides = extract_overrides(context.messages, api_client=client)
+		overrides = extract_overrides(context.messages, api_client=client, usage=message_usage)
 		decisions.append(decide_request(context, bundle.exchange_rates, overrides))
 
 	with output_path.open("w", newline="", encoding="utf-8") as output_file:
@@ -147,6 +229,11 @@ def run(data_dir: Path, output_path: Path) -> tuple[list[Decision], list[str], f
 
 	failures = _validation_failures(bundle, decisions)
 	failures.extend(_output_file_failures(output_path, len(bundle.requests)))
+	_write_usage_report(
+		output_path, len(bundle.requests), client, evidence_usage, message_usage,
+		bundle, resolvable_images,
+	)
+	print(f"Wrote usage report {Path(__file__).resolve().parent / 'evaluation' / 'usage_report.md'}.")
 	elapsed = time.perf_counter() - started
 	return decisions, failures, elapsed
 

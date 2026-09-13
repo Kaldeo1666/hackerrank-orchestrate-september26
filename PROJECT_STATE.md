@@ -147,6 +147,26 @@ decision. Keep the "why" and the alternative you rejected.)*
 - 2026-09-13 — Diagnostic result: full cached pipeline produced output.csv
   with 250 data rows plus header in 164.02 seconds; all validation checks
   passed with zero failures.
+- 2026-09-13 — Decided: usage accounting stays provider-agnostic by adding
+  optional mutable usage accumulators to both extraction functions while
+  preserving their existing list return APIs. Fresh response metadata is
+  cached for message overrides, and main.py writes evaluation/usage_report.md
+  from combined image/text totals. Rejected: inferring cost from cache size or
+  counting every request-context cache lookup as a unique billable item. Why:
+  only real API responses have token usage, and unique item counts make cache
+  savings auditable.
+- 2026-09-13 — Diagnostic result: final cached run used 0 real calls and 0
+  tokens, served 52 unique resolvable items from cache, and identified 3
+  related messages outside evaluation-request users. output.csv stayed byte
+  identical (SHA-256 FB30026951EBC177EC2935D4C386FCC86B7F6F2239DE4D53AB213F776A495C22)
+  with zero validation failures.
+- 2026-09-13 — Fixed: usage_report.md was written to the wrong location.
+  main.py derived the report path from output.csv's parent, so a root-level
+  output.csv created evaluation/usage_report.md while the required
+  code/evaluation/usage_report.md stayed empty. Changed the writer to resolve
+  its destination from code/main.py, removed the misleading root-level copy,
+  and added an explicit path message. Verified the required file persisted
+  1,040 bytes with the full report after a cached 250-request run.
 
 ---
 

@@ -76,6 +76,7 @@ def extract_overrides(
     messages: list[Message],
     api_client: LLMClient | None = None,
     cache_path: str | Path = "code/engine/.message_override_cache.json",
+    usage: dict | None = None,
 ) -> list[MessageOverride]:
     """Only processes messages carrying a related_event_id — a message
     with none has nothing to attach an override to, by definition."""
@@ -83,6 +84,16 @@ def extract_overrides(
     cache = _load_cache(cache_path)
     if api_client is None:
         api_client = get_client()
+
+    if usage is None:
+        usage = {}
+    usage.setdefault("input_tokens", 0)
+    usage.setdefault("output_tokens", 0)
+    usage.setdefault("calls", 0)
+    usage.setdefault("fresh_items", 0)
+    usage.setdefault("cached_items", 0)
+    usage.setdefault("fresh_item_ids", set())
+    usage.setdefault("cached_item_ids", set())
 
     overrides: list[MessageOverride] = []
 
@@ -92,6 +103,8 @@ def extract_overrides(
 
         if msg.message_id in cache:
             parsed = cache[msg.message_id]
+            usage["cached_items"] += 1
+            usage["cached_item_ids"].add(msg.message_id)
         else:
             result = call_with_retry(lambda: api_client.call_text(
                 system_prompt=OVERRIDE_SYSTEM_PROMPT,
@@ -101,7 +114,18 @@ def extract_overrides(
             fallback = {"category": "irrelevant", "new_amount": None, "effective_date": None,
                         "confidence": "low", "note": "response did not parse as JSON"}
             parsed = parse_json_response(result, fallback)
+            parsed["_usage"] = {
+                "input_tokens": result.input_tokens,
+                "output_tokens": result.output_tokens,
+                "model": result.model,
+                "provider": result.provider,
+            }
             cache[msg.message_id] = parsed
+            usage["input_tokens"] += result.input_tokens
+            usage["output_tokens"] += result.output_tokens
+            usage["calls"] += 1
+            usage["fresh_items"] += 1
+            usage["fresh_item_ids"].add(msg.message_id)
             _save_cache(cache_path, cache)
             time.sleep(3)  # same free-tier pacing as evidence_resolver.py
 

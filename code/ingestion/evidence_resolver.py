@@ -90,6 +90,7 @@ def resolve_blank_amounts(
     data_dir: str | Path,
     api_client: LLMClient | None = None,
     cache_path: str | Path = "code/ingestion/.evidence_cache.json",
+    usage: dict | None = None,
 ) -> list[dict]:
     """Mutates FinancialEvent.amount in-place for every event whose amount
     was None, by finding the linked image and running vision extraction.
@@ -104,6 +105,16 @@ def resolve_blank_amounts(
 
     if api_client is None:
         api_client = get_client()   # reads LLM_PROVIDER from .env, defaults to gemini
+
+    if usage is None:
+        usage = {}
+    usage.setdefault("input_tokens", 0)
+    usage.setdefault("output_tokens", 0)
+    usage.setdefault("calls", 0)
+    usage.setdefault("fresh_items", 0)
+    usage.setdefault("cached_items", 0)
+    usage.setdefault("fresh_item_ids", set())
+    usage.setdefault("cached_item_ids", set())
 
     # Build event_id -> image lookup across all users.
     image_by_event: dict[str, object] = {}
@@ -132,6 +143,8 @@ def resolve_blank_amounts(
             if image.image_id in cache:
                 parsed = cache[image.image_id]
                 cached = True
+                usage["cached_items"] += 1
+                usage["cached_item_ids"].add(image.image_id)
             else:
                 image_path = data_dir / "media" / "images" / f"{image.image_id}.png"
                 parsed = _extract_amount_from_image(image_path, api_client)
@@ -141,6 +154,11 @@ def resolve_blank_amounts(
                 total_usage["input_tokens"] += usage.get("input_tokens", 0)
                 total_usage["output_tokens"] += usage.get("output_tokens", 0)
                 total_usage["calls"] += 1
+                usage["input_tokens"] += parsed.get("_usage", {}).get("input_tokens", 0)
+                usage["output_tokens"] += parsed.get("_usage", {}).get("output_tokens", 0)
+                usage["calls"] += 1
+                usage["fresh_items"] += 1
+                usage["fresh_item_ids"].add(image.image_id)
                 _save_cache(cache_path, cache)  # save incrementally — don't lose progress on interruption
                 # gemini-2.0-flash-lite's free tier allows 30 requests/minute —
                 # pace at ~3s apart to stay comfortably under that.
