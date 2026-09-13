@@ -12,6 +12,7 @@
   16/16 images resolved, all datasets load cleanly]
 - **Block 2** — Recurrence detection, message-based conflict resolution
   (amendments/cancellations/settlements), 90-day safety simulator.
+  [CODE WRITTEN 2026-09-13, not yet run — see §3]
 - **Block 3** — Decision engine: affordability_status, payment method
   eligibility, the 6-rule plan ranking, spending_changes_needed.
 - **Block 4** — Output writer + deterministic verifier, full 250-row run,
@@ -99,9 +100,43 @@ decision. Keep the "why" and the alternative you rejected.)*
   lightweight Flash model. Rejected: pinning another dated model name.
   Why: dated names keep getting retired faster than any source can track
   in 2026; the alias survives future renames without a code change.
-  If quota issues resurface, try gemini-2.5-flash-lite (explicit, not
-  aliased) as a fallback — full list of available models is in
-  list_gemini_models.py's output, rerun it any time to refresh.
+- 2026-09-13 — Fixed real bug: fetched problem_statement.md's full text
+  directly (had only had it summarized before). Confirmed verbatim:
+  "Ignore pending credits, failed or cancelled transactions, duplicate
+  records, and unrealized investments." Our _is_included() only excluded
+  pending credits — cancelled/failed events of EITHER direction were
+  still being counted (user_26 has 2 cancelled events that were silently
+  included before this fix). Also confirmed linked_event_id is
+  specifically for "the same transaction or investment lifecycle" per
+  spec text — validates the earlier recurrence.py fix (switching to
+  description+category grouping) was correct for the right reason, not
+  a workaround. Still open: "duplicate records" and "unrealized
+  investments" exclusion not yet implemented — need to inspect actual
+  event_type/category values across the dataset to find how those are
+  marked before writing the filter (don't guess the field name blind).
+- 2026-09-13 — Fixed: recurrence detection assumed linked_event_id chained
+  subscription/debt_payment occurrences together. Verified against real
+  data (block2_check.py diagnostic on user_26): linked_event_id is None
+  on every such event. Rejected that approach. Actual signal: identical
+  (event_type, description, category) repeating at a regular interval
+  (e.g. "Video streaming plan"/streaming, same amount, ~30 days apart).
+  Rewrote build_recurrence_chains() to group on that instead. This
+  directly fixed a real bug: the simulator was showing a flat balance
+  across the whole 90-day window because zero future events were being
+  projected, since financial_events.csv only contains historical rows —
+  everything in the forecast window HAS to come from projection.
+
+- 2026-09-13 — Decided: Block 3 uses a deterministic candidate engine in
+  code/engine/decision.py. It evaluates full, partial, installment, and wait
+  plans through the existing 90-day simulator, then ranks safe candidates by
+  deadline completion, spending changes, total cost, start date, payment
+  count, and option id. Rejected: letting an LLM choose amounts or plans.
+  Why: exact arithmetic and auditable safety invariants are required; the LLM
+  boundary remains limited to message/image extraction.
+- 2026-09-13 — Diagnostic result: generated decisions for all 250 requests
+  with hard-contract checks passing: 78 full_payment, 41 installments,
+  1 partial_payment, 8 wait, and 122 not_recommended. Fixed a floating-point
+  boundary case where a safe full request was reported one cent short.
 
 ---
 
@@ -119,23 +154,46 @@ decision. Keep the "why" and the alternative you rejected.)*
 *(Overwrite this whole section each time — it should always reflect
 "where things stand right now," not history.)*
 
-- **Phase:** Block 1 COMPLETE and verified. 16/16 blank-amount events
-  resolved via Gemini vision, currency conversion working, all 25,342
-  events + 250 requests + 275 profiles load cleanly. Ready for Block 2.
-- **Block 1 files:** code/{__init__.py, ingestion/{__init__.py, loaders.py,
-  currency.py, llm_provider.py, evidence_resolver.py, block1_check.py,
-  list_gemini_models.py, .evidence_cache.json (auto-generated, gitignored)}},
-  requirements.txt, .env.example, .env (gitignored, has real key),
-  .gitignore, PROJECT_STATE.md
-- **Sample accuracy so far:** N/A — Block 1 has no decisions yet, just ingestion
-- **Known bugs / open risks:** currency conversion only spot-checked on an
-  IDR->IDR (same-currency, trivial) case so far — genuinely test a
-  cross-currency request before trusting it in Block 2/3. LLM_PROVIDER=gemini
-  with LLM_MODEL=gemini-flash-lite-latest confirmed working end-to-end.
-- **Next concrete action:** START A NEW CHAT SESSION for Block 2 (recurrence
-  detection + 90-day simulator) — paste this file's contents plus the
-  handoff prompt in §6 first. Block 2 is the most logic-heavy block, don't
-  cram it into an already-long session.
+- **Phase:** Block 1 COMPLETE and verified (16/16 images resolved, all
+  25,342 events + 250 requests + 275 profiles load cleanly). Block 2 code
+  complete and smoke-tested on user_100 with projected recurring debits and
+  scheduled salary visible. Block 3 decision engine implemented and validated
+  across all 250 requests for hard output contracts.
+- **Block 2 files:** code/engine/{__init__.py, recurrence.py,
+  message_overrides.py, simulator.py, block2_check.py}
+- **Block 3 files:** code/engine/decision.py
+- **Sample accuracy so far:** N/A — no hidden labels; 250-request deterministic
+  contract diagnostic passes
+- **Known bugs / open risks:** (1) message override prompt is untested
+  against real message text — the category definitions (esp.
+  "confirmation" vs "irrelevant" for pending-income language) need
+  spot-checking once real output is visible; request_26's messages
+  produced 0 overrides, unconfirmed whether that's correct or the prompt
+  is too conservative. (2) FIXED — debit inclusion + cancelled/failed
+  exclusion now confirmed verbatim against problem_statement.md (see
+  §4.5 and decisions log). (3) recurrence grouping by (event_type,
+  description, category) is verified for subscription/debt_payment types
+  specifically — not yet checked whether debt_payment events follow the
+  same clean monthly pattern as the subscription examples seen so far.
+  (4) NOT YET IMPLEMENTED: "duplicate records" and "unrealized
+  investments" exclusion (both explicitly required by spec) — need to
+  inspect actual event_type/category values across the dataset first to
+  find the right field/marker before writing the filter.
+- 2026-09-13 — Fixed: found a real event (user_100, event_9338) with
+  status="scheduled" and description="Next confirmed salary" — the exact
+  phrase from problem_statement.md's file description of what's in the
+  dataset. _is_included() only allowed settled/confirmed for credits,
+  so this genuinely-confirmed income was being wrongly excluded. Added
+  "scheduled" to the allowed credit statuses. Also caught: an earlier
+  Add-Content command merged two .gitignore lines into one broken line
+  with no newline between them — neither path was actually being
+  ignored. Split back into separate lines. Lesson: always verify
+  .gitignore with `type .gitignore` after Add-Content, don't assume it
+  appended cleanly.
+- **Next concrete action:** add the main pipeline/output writer and a
+  deterministic verifier. Before final packaging, close the remaining Block 2
+  data-marker review for duplicate records and unrealized investments, and
+  spot-check message overrides against real message text.
 
 ---
 
@@ -182,6 +240,59 @@ decision. Keep the "why" and the alternative you rejected.)*
   Recommended module layout: code/ingestion/ (loaders — DONE, see loaders.py),
   code/engine/ (90-day sim + decision + ranking), code/evaluation/ (scoring harness
   + usage_report.md generator).
+
+---
+
+## 4.5 BLOCK 3 RULES DIGEST (verbatim/near-verbatim from problem_statement.md —
+full text also lives in the repo root as problem_statement.md, fetch that
+directly if anything here needs double-checking)
+
+**Eligibility**: an immediate method (full_payment/partial_payment/
+installments) is eligible only if it's in the user's
+payment_methods_user_will_consider. `wait` is eligible only if full
+payment becomes safe later AND user accepts full_payment. `not_recommended`
+is the fallback when nothing safe is eligible.
+
+**Ranking when multiple eligible plans are safe** (in this exact order):
+1. Complete the full request by desired_completion_date
+2. Require no spending changes
+3. Minimize total amount paid
+4. Start payment earlier
+5. Use fewer payments
+6. Lowest payment_option_id as final tie-breaker
+
+**partial_payment specifics**: affordability_status must be
+affordable_with_plan. Only when request allows partial payment AND user
+accepts partial_payment AND 0 < amount_safe_to_pay < requested_amount AND
+earliest_date_for_full_payment <= desired_completion_date. Plan = EXACTLY
+two payments: amount_safe_to_pay on request_date, then
+(requested_amount - amount_safe_to_pay) on earliest_date_for_full_payment.
+Does NOT need to match a request_payment_options.csv row (unlike
+installments, which MUST match one exactly).
+
+**affordable_now**: earliest_date_for_full_payment MUST equal request_date.
+Leave earliest_date_for_full_payment empty when full amount never becomes
+safe within the forecast window.
+
+**spending_changes_needed**: up to 3 changes, `|`-separated,
+`stop:<event_id>` or `reduce_to:<event_id>:<new_amount>`. Only recurring
+expenses marked flexible. stop and reduce are mutually exclusive PER EVENT
+(if both needed, must reference different events). `none` when nothing needed.
+
+**payment_plan format**: `<YYYY-MM-DD>:<amount>|<YYYY-MM-DD>:<amount>`,
+chronological order, `none` when no payment recommended.
+
+**Conflict resolution priority** (for when records disagree):
+1. An explicit cancellation, settlement, or amendment
+2. A newer record from the same source
+3. A settled event over an estimate/forecast
+4. The financially safer interpretation, if still unresolved
+
+**Hard rule**: 0 <= amount_safe_to_pay <= requested_amount, always.
+**Hard rule**: never invent unsupported income, expenses, payment options,
+or financial information.
+**Investment requests**: concern affordability + existing contributions
+only — never predict asset prices or recommend securities.
 
 ---
 
